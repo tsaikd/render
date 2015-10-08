@@ -33,7 +33,7 @@
 //
 //    m.Run()
 //  }
-package render
+package renderext
 
 import (
 	"bytes"
@@ -41,13 +41,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"html/template"
-  "io"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/martini-contrib/render"
 	"github.com/oxtoacart/bpool"
 
 	"github.com/go-martini/martini"
@@ -80,11 +81,11 @@ var helperFuncs = template.FuncMap{
 
 // Render is a service that can be injected into a Martini handler. Render provides functions for easily writing JSON and
 // HTML templates out to a http Response.
-type Render interface {
+type _Render interface {
 	// JSON writes the given status and JSON serialized version of the given value to the http.ResponseWriter.
 	JSON(status int, v interface{})
 	// HTML renders a html template specified by the name and writes the result and given status to the http.ResponseWriter.
-	HTML(status int, name string, v interface{}, htmlOpt ...HTMLOptions)
+	HTML(status int, name string, v interface{}, htmlOpt ...render.HTMLOptions)
 	// XML writes the given status and XML serialized version of the given value to the http.ResponseWriter.
 	XML(status int, v interface{})
 	// Data writes the raw byte array to the http.ResponseWriter.
@@ -103,8 +104,13 @@ type Render interface {
 	Header() http.Header
 }
 
+// RenderController is used for control render service options
+type RenderController interface {
+	SetResponseWriter(rw http.ResponseWriter)
+}
+
 // Delims represents a set of Left and Right delimiters for HTML template rendering
-type Delims struct {
+type _Delims struct {
 	// Left delimiter, defaults to {{
 	Left string
 	// Right delimiter, defaults to }}
@@ -112,7 +118,7 @@ type Delims struct {
 }
 
 // Options is a struct for specifying configuration options for the render.Renderer middleware
-type Options struct {
+type _Options struct {
 	// Directory to load templates. Default is "templates"
 	Directory string
 	// Layout template name. Will not render a layout if "". Defaults to "".
@@ -122,7 +128,7 @@ type Options struct {
 	// Funcs is a slice of FuncMaps to apply to the template upon compilation. This is useful for helper functions. Defaults to [].
 	Funcs []template.FuncMap
 	// Delims sets the action delimiters to the specified strings in the Delims struct.
-	Delims Delims
+	Delims render.Delims
 	// Appends the given charset to the Content-Type header. Default is "UTF-8".
 	Charset string
 	// Outputs human readable JSON
@@ -138,7 +144,7 @@ type Options struct {
 }
 
 // HTMLOptions is a struct for overriding some rendering Options for specific HTML call
-type HTMLOptions struct {
+type _HTMLOptions struct {
 	// Layout template name. Overrides Options.Layout.
 	Layout string
 }
@@ -149,7 +155,7 @@ type HTMLOptions struct {
 //
 // If MARTINI_ENV is set to "" or "development" then templates will be recompiled on every request. For more performance, set the
 // MARTINI_ENV environment variable to "production"
-func Renderer(options ...Options) martini.Handler {
+func Renderer(options ...render.Options) martini.Handler {
 	opt := prepareOptions(options)
 	cs := prepareCharset(opt.Charset)
 	t := compile(opt)
@@ -163,7 +169,10 @@ func Renderer(options ...Options) martini.Handler {
 			// use a clone of the initial template
 			tc, _ = t.Clone()
 		}
-		c.MapTo(&renderer{res, req, tc, opt, cs}, (*Render)(nil))
+		//		c.MapTo(&renderer{res, req, tc, opt, cs}, (*render.Render)(nil))
+		rendererContext := &renderer{res, req, tc, opt, cs}
+		c.MapTo(rendererContext, (*render.Render)(nil))
+		c.MapTo(rendererContext, (*RenderController)(nil))
 	}
 }
 
@@ -175,8 +184,8 @@ func prepareCharset(charset string) string {
 	return "; charset=" + defaultCharset
 }
 
-func prepareOptions(options []Options) Options {
-	var opt Options
+func prepareOptions(options []render.Options) render.Options {
+	var opt render.Options
 	if len(options) > 0 {
 		opt = options[0]
 	}
@@ -195,7 +204,7 @@ func prepareOptions(options []Options) Options {
 	return opt
 }
 
-func compile(options Options) *template.Template {
+func compile(options render.Options) *template.Template {
 	dir := options.Directory
 	t := template.New(dir)
 	t.Delims(options.Delims.Left, options.Delims.Right)
@@ -249,7 +258,7 @@ type renderer struct {
 	http.ResponseWriter
 	req             *http.Request
 	t               *template.Template
-	opt             Options
+	opt             render.Options
 	compiledCharset string
 }
 
@@ -275,7 +284,7 @@ func (r *renderer) JSON(status int, v interface{}) {
 	r.Write(result)
 }
 
-func (r *renderer) HTML(status int, name string, binding interface{}, htmlOpt ...HTMLOptions) {
+func (r *renderer) HTML(status int, name string, binding interface{}, htmlOpt ...render.HTMLOptions) {
 	opt := r.prepareHTMLOptions(htmlOpt)
 	// assign a layout if there is one
 	if len(opt.Layout) > 0 {
@@ -375,12 +384,16 @@ func (r *renderer) addYield(name string, binding interface{}) {
 	r.t.Funcs(funcs)
 }
 
-func (r *renderer) prepareHTMLOptions(htmlOpt []HTMLOptions) HTMLOptions {
+func (r *renderer) prepareHTMLOptions(htmlOpt []render.HTMLOptions) render.HTMLOptions {
 	if len(htmlOpt) > 0 {
 		return htmlOpt[0]
 	}
 
-	return HTMLOptions{
+	return render.HTMLOptions{
 		Layout: r.opt.Layout,
 	}
+}
+
+func (r *renderer) SetResponseWriter(rw http.ResponseWriter) {
+	r.ResponseWriter = rw
 }

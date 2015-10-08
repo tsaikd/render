@@ -1,4 +1,4 @@
-package render
+package renderext
 
 import (
 	"encoding/xml"
